@@ -17,10 +17,8 @@ const PORT = process.env.PORT || 8080;
 // API Keys (stored in environment variables on Render)
 const API_KEYS = {
     tmdb: process.env.TMDB_API_KEY || '1f54bd990f1cdfb230adb312546d765d',
-    debrid: process.env.DEBRID_API_KEY || '21vctawafWMED4R3NgrQB-8l0W-cJ6ZORuobWmn-ZcHKZ14vWtsYoKe80n8N-gyp',
+    debrid: process.env.DEBRID_API_KEY || '',
 };
-
-const DEBRID_BASE_URL = 'https://debrid-link.com/api/v2';
 
 // User database (in production, use a real DB)
 const DATA_DIR = process.env.DATA_DIR || './data';
@@ -438,14 +436,8 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
             const magnet = `magnet:?xt=urn:btih:${bestStream.infoHash}`;
             const debridUrl = await resolveDebrid(magnet);
             if (debridUrl) {
-                console.log('[Resolve] ✅ Got debrid URL - returning clean stream');
-                return {
-                    type: 'url',
-                    url: debridUrl,
-                    name: bestStream.name,
-                    quality: bestStream.name?.match(/\d{3,4}p/)?.[0] || '1080p',
-                    size: bestStream.title?.match(/💾\s*([\d.]+\s*GB)/)?.[1] || 'Unknown'
-                };
+                console.log('[Resolve] Got debrid URL');
+                return { type: 'url', url: debridUrl };
             }
         }
 
@@ -477,99 +469,20 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
 }
 
 async function resolveDebrid(magnetLink) {
-    if (!API_KEYS.debrid) {
-        console.log('[Debrid] No API key configured');
-        return null;
-    }
+    if (!API_KEYS.debrid) return null;
 
     try {
-        console.log('[Debrid] Adding magnet to seedbox...');
+        // Real-Debrid API flow
+        // 1. Add magnet
+        // 2. Get cached/instant availability
+        // 3. Return streaming URL
 
-        // Step 1: Add magnet to seedbox
-        const addResponse = await fetch(`${DEBRID_BASE_URL}/seedbox/add`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${API_KEYS.debrid}`,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: `url=${encodeURIComponent(magnetLink)}&async=true`
-        });
-
-        const addData = await addResponse.json();
-        console.log('[Debrid] Add response:', addData.success ? 'SUCCESS' : addData.error);
-
-        if (!addData.success || !addData.value) {
-            console.error('[Debrid] Failed to add magnet:', addData.error);
-            return null;
-        }
-
-        const torrentId = addData.value.id;
-        console.log('[Debrid] Torrent ID:', torrentId);
-
-        // Step 2: Poll for completion (max 60 seconds)
-        let attempts = 0;
-        const maxAttempts = 120; // 60 seconds
-        let torrent = addData.value;
-
-        while (torrent.status !== 100 && (!torrent.files || torrent.files.length === 0)) {
-            if (attempts >= maxAttempts) {
-                console.log('[Debrid] Timeout waiting for torrent');
-                break;
-            }
-
-            await new Promise(r => setTimeout(r, 500)); // Wait 0.5s
-            attempts++;
-
-            // Check status
-            const listResponse = await fetch(`${DEBRID_BASE_URL}/seedbox/list?ids=${torrentId}`, {
-                headers: { 'Authorization': `Bearer ${API_KEYS.debrid}` }
-            });
-            const listData = await listResponse.json();
-
-            if (listData.success && listData.value && listData.value.length > 0) {
-                torrent = listData.value[0];
-                if (attempts % 10 === 0) {
-                    console.log(`[Debrid] Status: ${torrent.status}%, files: ${torrent.files?.length || 0}`);
-                }
-            }
-        }
-
-        // Step 3: Get the largest video file
-        if (!torrent.files || torrent.files.length === 0) {
-            console.log('[Debrid] No files in torrent');
-            return null;
-        }
-
-        // Find largest video file
-        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
-        let bestFile = null;
-        let maxSize = 0;
-
-        for (const file of torrent.files) {
-            const isVideo = videoExtensions.some(ext =>
-                file.name?.toLowerCase().endsWith(ext)
-            );
-            if (isVideo && file.size > maxSize) {
-                maxSize = file.size;
-                bestFile = file;
-            }
-        }
-
-        // Fallback to largest file if no video found
-        if (!bestFile) {
-            bestFile = torrent.files.reduce((a, b) => (a.size > b.size ? a : b));
-        }
-
-        if (bestFile && bestFile.downloadUrl) {
-            console.log(`[Debrid] ✅ Got stream URL for: ${bestFile.name} (${(bestFile.size / 1024 / 1024 / 1024).toFixed(2)} GB)`);
-            return bestFile.downloadUrl;
-        }
-
-        console.log('[Debrid] No download URL found');
-        return null;
+        // This is a simplified version - implement full debrid flow here
+        console.log('[Debrid] Would resolve magnet here...');
+        return null; // Return actual debrid URL when implemented
 
     } catch (error) {
-        console.error('[Debrid] Error:', error.message);
+        console.error('[Debrid] Error:', error);
         return null;
     }
 }
