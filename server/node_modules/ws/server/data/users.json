@@ -1,0 +1,20 @@
+{
+  "hash": {
+    "password": "hashed_123",
+    "role": "admin",
+    "displayName": "Hash",
+    "authorityRank": 100
+  },
+  "minah": {
+    "password": "hashed_minah123",
+    "role": "viewer",
+    "displayName": "Minah",
+    "authorityRank": 30
+  },
+  "min": {
+    "password": "hashed_123",
+    "role": "cohost",
+    "displayName": "Min",
+    "authorityRank": 50
+  }
+}
