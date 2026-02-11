@@ -292,10 +292,8 @@ const server = http.createServer(async (req, res) => {
         }
 
         // ========== APP CONFIG (returns encoded provider info) ==========
+        // Public endpoint - no auth required (LOCAL mode users need this)
         if (pathname === '/config' && method === 'GET') {
-            const auth = verifyAuth(req);
-            if (!auth) return sendJSON(res, { error: 'Unauthorized' }, 401);
-
             // Provider config stored on server - app never has these URLs
             // Encoded as binary (base64) for additional obfuscation
             sendJSON(res, {
