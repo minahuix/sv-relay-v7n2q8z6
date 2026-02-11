@@ -428,7 +428,7 @@ async function fetchJSON(targetUrl) {
 
 // Stream Index URL (kept on server only)
 const STREAM_INDEX_URL = 'https://torrentio.strem.fun';
-const STREAM_INDEX_CONFIG = 'sort=qualitysize|qualityfilter=480p,scr,cam';
+const STREAM_INDEX_CONFIG = 'sort=qualitysize%7Cqualityfilter=480p,scr,cam';
 
 // Search streams - returns list for local debrid resolution
 async function searchStreams(imdbId, mediaType, season, episode) {
