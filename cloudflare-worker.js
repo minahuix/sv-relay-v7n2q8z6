@@ -47,12 +47,25 @@ export default {
       try {
         const response = await fetch(targetUrl, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Accept': 'application/json'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://web.stremio.com/',
+            'Origin': 'https://web.stremio.com'
           }
         });
 
-        const data = await response.json();
+        const text = await response.text();
+
+        // Check if we got HTML (blocked) instead of JSON
+        if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
+          return Response.json(
+            { success: false, error: 'Blocked by upstream', blocked: true },
+            { status: 503, headers: { 'Access-Control-Allow-Origin': '*' } }
+          );
+        }
+
+        const data = JSON.parse(text);
 
         // Return streams in same format as torrentio (for StremioStream compatibility)
         const streams = (data.streams || []).map(s => ({
