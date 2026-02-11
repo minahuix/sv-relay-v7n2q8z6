@@ -128,7 +128,22 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // ========== STREAMS (The magic - hides all torrent/debrid logic) ==========
+        // ========== STREAMS ==========
+
+        // Stream Search - Returns list of available streams (for local debrid resolution)
+        if (pathname === '/streams/search' && method === 'POST') {
+            const auth = verifyAuth(req);
+            if (!auth) return sendJSON(res, { error: 'Unauthorized' }, 401);
+
+            const { imdbId, mediaType, season, episode } = JSON.parse(body);
+            console.log(`[Stream Search] ${auth.userId} searching: ${imdbId} (${mediaType})`);
+
+            const streams = await searchStreams(imdbId, mediaType, season, episode);
+            sendJSON(res, { success: true, streams });
+            return;
+        }
+
+        // Stream Resolve - Full resolution (search + debrid) for thin clients
         if (pathname === '/streams/resolve' && method === 'POST') {
             const auth = verifyAuth(req);
             if (!auth) return sendJSON(res, { error: 'Unauthorized' }, 401);
@@ -139,7 +154,7 @@ const server = http.createServer(async (req, res) => {
 
             // This is where all the secret magic happens
             // Client just asks "give me stream for Interstellar"
-            // Server does: torrent search -> debrid -> clean URL
+            // Server does: stream search -> debrid -> clean URL
             const streamResult = await resolveStream(tmdbId, mediaType, title, season, episode);
 
             if (streamResult) {
@@ -394,8 +409,54 @@ async function fetchJSON(url) {
 // ============================================
 // STREAM RESOLUTION (The Secret Sauce)
 // This is where all the magic happens
-// Client never sees torrent/debrid logic
+// Client never sees stream source URLs
 // ============================================
+
+// Stream Index URL (kept on server only)
+const STREAM_INDEX_URL = 'https://torrentio.strem.fun';
+const STREAM_INDEX_CONFIG = 'sort=qualitysize|qualityfilter=480p,scr,cam';
+
+// Search streams - returns list for local debrid resolution
+async function searchStreams(imdbId, mediaType, season, episode) {
+    try {
+        const typeStr = mediaType === 'movie' ? 'movie' : 'series';
+        let endpoint = `/${STREAM_INDEX_CONFIG}/stream/${typeStr}/${imdbId}`;
+
+        if (mediaType === 'series' && season && episode) {
+            endpoint += `:${season}:${episode}`;
+        }
+        endpoint += '.json';
+
+        const url = `${STREAM_INDEX_URL}${endpoint}`;
+        console.log(`[Search] Fetching: ${url}`);
+
+        const response = await fetchJSON(url);
+
+        if (!response.streams || response.streams.length === 0) {
+            console.log('[Search] No streams found');
+            return [];
+        }
+
+        // Convert to clean format with source links constructed on server
+        const streams = response.streams.map(s => ({
+            name: s.name,
+            title: s.title,
+            quality: s.name?.match(/\d{3,4}p/)?.[0] || null,
+            size: s.title?.match(/💾\s*([\d.]+\s*GB)/)?.[1] || null,
+            // Server constructs the full source link - client never sees the protocol
+            source: s.infoHash ? `magnet:?xt=urn:btih:${s.infoHash}` : s.url,
+            infoHash: s.infoHash,
+            fileIdx: s.fileIdx
+        }));
+
+        console.log(`[Search] Found ${streams.length} streams`);
+        return streams;
+
+    } catch (error) {
+        console.error('[Search] Error:', error.message);
+        return [];
+    }
+}
 
 async function resolveStream(tmdbId, mediaType, title, season, episode) {
     console.log(`[Resolve] Starting for: ${title} (${mediaType})`);
@@ -413,10 +474,11 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
         }
         console.log(`[Resolve] Got IMDB ID: ${imdbId}`);
 
-        // Step 1: Search torrents via Torrentio (using IMDB ID)
-        const torrentioUrl = mediaType === 'movie'
-            ? `https://torrentio.strem.fun/stream/movie/${imdbId}.json`
-            : `https://torrentio.strem.fun/stream/series/${imdbId}:${season}:${episode}.json`;
+        // Step 1: Search streams via Stream Index (using IMDB ID)
+        const streamUrl = mediaType === 'movie'
+            ? `${STREAM_INDEX_URL}/${STREAM_INDEX_CONFIG}/stream/movie/${imdbId}.json`
+            : `${STREAM_INDEX_URL}/${STREAM_INDEX_CONFIG}/stream/series/${imdbId}:${season}:${episode}.json`;
+        const torrentioUrl = streamUrl;
 
         console.log(`[Resolve] Fetching: ${torrentioUrl}`);
         const torrents = await fetchJSON(torrentioUrl);
@@ -580,7 +642,7 @@ async function resolveDebrid(magnetLink) {
 server.listen(PORT, () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
-║           HASHLAND RELAY SERVER v1.0                          ║
+║           HASHLAND RELAY SERVER v1.1                          ║
 ║═══════════════════════════════════════════════════════════════║
 ║  HTTP API:    http://localhost:${PORT}                           ║
 ║  WebSocket:   ws://localhost:${PORT}                             ║
@@ -588,7 +650,8 @@ server.listen(PORT, () => {
 ║  Endpoints:                                                   ║
 ║    POST /auth/login        - Login                           ║
 ║    GET  /auth/verify       - Verify token                    ║
-║    POST /streams/resolve   - Get stream URL (magic!)         ║
+║    POST /streams/search    - Search streams (for local mode) ║
+║    POST /streams/resolve   - Full resolution (thin client)   ║
 ║    GET  /library           - Get user library                ║
 ║    POST /library           - Add to library                  ║
 ║    GET  /tmdb/*            - TMDB proxy (hides API key)      ║
