@@ -165,6 +165,30 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        // Resolve infoHash to playable URL via debrid
+        if (pathname === '/streams/resolve-hash' && method === 'POST') {
+            const auth = verifyAuth(req);
+            if (!auth) return sendJSON(res, { error: 'Unauthorized' }, 401);
+
+            const { infoHash, fileIdx } = JSON.parse(body);
+            console.log(`[Debrid] Resolving hash for ${auth.userId}: ${infoHash}`);
+
+            if (!infoHash) {
+                return sendJSON(res, { error: 'Missing infoHash' }, 400);
+            }
+
+            // Construct magnet and resolve via debrid
+            const magnet = `magnet:?xt=urn:btih:${infoHash}`;
+            const playableUrl = await resolveDebrid(magnet, fileIdx);
+
+            if (playableUrl) {
+                sendJSON(res, { success: true, url: playableUrl });
+            } else {
+                sendJSON(res, { success: false, error: 'Failed to resolve' }, 500);
+            }
+            return;
+        }
+
         // ========== LIBRARY ==========
         if (pathname === '/library' && method === 'GET') {
             const auth = verifyAuth(req);
@@ -559,14 +583,14 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
     }
 }
 
-async function resolveDebrid(magnetLink) {
+async function resolveDebrid(magnetLink, fileIdx = null) {
     if (!API_KEYS.debrid) {
         console.log('[Debrid] No API key configured');
         return null;
     }
 
     try {
-        console.log('[Debrid] Adding magnet to seedbox...');
+        console.log('[Debrid] Adding magnet to seedbox...', fileIdx !== null ? `(fileIdx: ${fileIdx})` : '');
 
         // Step 1: Add magnet to seedbox
         const addResponse = await fetch(`${DEBRID_BASE_URL}/seedbox/add`, {
@@ -623,24 +647,31 @@ async function resolveDebrid(magnetLink) {
             return null;
         }
 
-        // Find largest video file
+        // Find the right file
         const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
         let bestFile = null;
-        let maxSize = 0;
 
-        for (const file of torrent.files) {
-            const isVideo = videoExtensions.some(ext =>
-                file.name?.toLowerCase().endsWith(ext)
-            );
-            if (isVideo && file.size > maxSize) {
-                maxSize = file.size;
-                bestFile = file;
+        // If fileIdx is specified, use that file directly
+        if (fileIdx !== null && fileIdx >= 0 && fileIdx < torrent.files.length) {
+            bestFile = torrent.files[fileIdx];
+            console.log(`[Debrid] Using specified file index ${fileIdx}: ${bestFile?.name}`);
+        } else {
+            // Otherwise find largest video file
+            let maxSize = 0;
+            for (const file of torrent.files) {
+                const isVideo = videoExtensions.some(ext =>
+                    file.name?.toLowerCase().endsWith(ext)
+                );
+                if (isVideo && file.size > maxSize) {
+                    maxSize = file.size;
+                    bestFile = file;
+                }
             }
-        }
 
-        // Fallback to largest file if no video found
-        if (!bestFile) {
-            bestFile = torrent.files.reduce((a, b) => (a.size > b.size ? a : b));
+            // Fallback to largest file if no video found
+            if (!bestFile) {
+                bestFile = torrent.files.reduce((a, b) => (a.size > b.size ? a : b));
+            }
         }
 
         if (bestFile && bestFile.downloadUrl) {
