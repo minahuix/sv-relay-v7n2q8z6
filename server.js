@@ -291,6 +291,22 @@ const server = http.createServer(async (req, res) => {
             }
         }
 
+        // ========== APP CONFIG (returns encoded provider info) ==========
+        if (pathname === '/config' && method === 'GET') {
+            const auth = verifyAuth(req);
+            if (!auth) return sendJSON(res, { error: 'Unauthorized' }, 401);
+
+            // Provider config stored on server - app never has these URLs
+            // Encoded as binary (base64) for additional obfuscation
+            sendJSON(res, {
+                p: Buffer.from('https://torrentio.strem.fun').toString('base64'),
+                c: Buffer.from('sort=qualitysize|qualityfilter=480p,scr,cam').toString('base64'),
+                s: Buffer.from('magnet:?xt=urn:btih:').toString('base64'),
+                v: 1  // config version
+            });
+            return;
+        }
+
         // ========== HEALTH CHECK ==========
         if (pathname === '/' || pathname === '/health') {
             sendJSON(res, { status: 'ok', service: 'sv-relay', uptime: process.uptime() });
