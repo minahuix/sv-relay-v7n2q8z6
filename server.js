@@ -393,16 +393,30 @@ function verifyAuth(req) {
     return session;
 }
 
-async function fetchJSON(url) {
+async function fetchJSON(targetUrl) {
     return new Promise((resolve, reject) => {
-        https.get(url, (res) => {
+        const parsedUrl = new URL(targetUrl);
+        const options = {
+            hostname: parsedUrl.hostname,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'Accept': 'application/json'
+            }
+        };
+
+        https.request(options, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try { resolve(JSON.parse(data)); }
-                catch (e) { reject(e); }
+                catch (e) {
+                    console.error('[Fetch] Parse error:', data.substring(0, 200));
+                    reject(e);
+                }
             });
-        }).on('error', reject);
+        }).on('error', reject).end();
     });
 }
 
