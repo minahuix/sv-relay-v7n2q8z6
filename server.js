@@ -394,17 +394,7 @@ function verifyAuth(req) {
 }
 
 async function fetchJSON(targetUrl) {
-    // Use native fetch if available (Node 18+), fallback to https
-    if (typeof fetch !== 'undefined') {
-        const res = await fetch(targetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            }
-        });
-        return res.json();
-    }
-
+    console.log('[Fetch] Starting request to:', targetUrl);
     return new Promise((resolve, reject) => {
         https.get(targetUrl, {
             headers: {
@@ -412,16 +402,21 @@ async function fetchJSON(targetUrl) {
                 'Accept': 'application/json'
             }
         }, (res) => {
+            console.log('[Fetch] Response status:', res.statusCode);
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
+                console.log('[Fetch] Data length:', data.length);
                 try { resolve(JSON.parse(data)); }
                 catch (e) {
                     console.error('[Fetch] Parse error:', data.substring(0, 200));
                     reject(e);
                 }
             });
-        }).on('error', reject);
+        }).on('error', (e) => {
+            console.error('[Fetch] Network error:', e.message);
+            reject(e);
+        });
     });
 }
 
@@ -449,7 +444,14 @@ async function searchStreams(imdbId, mediaType, season, episode) {
         const url = `${STREAM_INDEX_URL}${endpoint}`;
         console.log(`[Search] Fetching: ${url}`);
 
-        const response = await fetchJSON(url);
+        let response;
+        try {
+            response = await fetchJSON(url);
+            console.log(`[Search] Got response, streams: ${response?.streams?.length || 'none'}`);
+        } catch (fetchErr) {
+            console.error(`[Search] Fetch failed: ${fetchErr.message}`);
+            return [];
+        }
 
         if (!response.streams || response.streams.length === 0) {
             console.log('[Search] No streams found');
