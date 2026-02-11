@@ -394,19 +394,24 @@ function verifyAuth(req) {
 }
 
 async function fetchJSON(targetUrl) {
-    return new Promise((resolve, reject) => {
-        const parsedUrl = new URL(targetUrl);
-        const options = {
-            hostname: parsedUrl.hostname,
-            path: parsedUrl.pathname + parsedUrl.search,
-            method: 'GET',
+    // Use native fetch if available (Node 18+), fallback to https
+    if (typeof fetch !== 'undefined') {
+        const res = await fetch(targetUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
                 'Accept': 'application/json'
             }
-        };
+        });
+        return res.json();
+    }
 
-        https.request(options, (res) => {
+    return new Promise((resolve, reject) => {
+        https.get(targetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'Accept': 'application/json'
+            }
+        }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
@@ -416,7 +421,7 @@ async function fetchJSON(targetUrl) {
                     reject(e);
                 }
             });
-        }).on('error', reject).end();
+        }).on('error', reject);
     });
 }
 
@@ -428,7 +433,7 @@ async function fetchJSON(targetUrl) {
 
 // Stream Index URL (kept on server only)
 const STREAM_INDEX_URL = 'https://torrentio.strem.fun';
-const STREAM_INDEX_CONFIG = 'sort=qualitysize%7Cqualityfilter=480p,scr,cam';
+const STREAM_INDEX_CONFIG = 'sort=qualitysize|qualityfilter=480p,scr,cam';
 
 // Search streams - returns list for local debrid resolution
 async function searchStreams(imdbId, mediaType, season, episode) {
