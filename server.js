@@ -268,8 +268,8 @@ const server = http.createServer(async (req, res) => {
         }
 
         // ========== HEALTH CHECK ==========
-        if (pathname === '/health') {
-            sendJSON(res, { status: 'ok', uptime: process.uptime() });
+        if (pathname === '/' || pathname === '/health') {
+            sendJSON(res, { status: 'ok', service: 'sv-relay', uptime: process.uptime() });
             return;
         }
 
