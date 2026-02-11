@@ -639,7 +639,7 @@ async function resolveDebrid(magnetLink) {
 // ============================================
 // START SERVER
 // ============================================
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
 ║           HASHLAND RELAY SERVER v1.1                          ║
