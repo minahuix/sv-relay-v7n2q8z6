@@ -436,31 +436,205 @@ function verifyAuth(req) {
     return session;
 }
 
-async function fetchJSON(targetUrl) {
-    console.log('[Fetch] Starting request to:', targetUrl);
+async function makeRequest(targetUrl, options = {}) {
+    const { method = 'GET', body = null, headers = {} } = options;
+    console.log(`[Request] ${method} ${targetUrl}`);
+
     return new Promise((resolve, reject) => {
-        https.get(targetUrl, {
+        const parsedUrl = url.parse(targetUrl);
+        const reqOptions = {
+            hostname: parsedUrl.hostname,
+            path: parsedUrl.path,
+            method: method,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Accept': 'application/json'
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                ...headers
+            },
+            timeout: 15000
+        };
+
+        const req = https.request(reqOptions, (res) => {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+                console.error(`[Request] Failed status: ${res.statusCode}`);
+                // Don't reject immediately, some APIs return error JSON
             }
-        }, (res) => {
-            console.log('[Fetch] Response status:', res.statusCode);
+
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                console.log('[Fetch] Data length:', data.length);
-                try { resolve(JSON.parse(data)); }
-                catch (e) {
-                    console.error('[Fetch] Parse error:', data.substring(0, 200));
-                    reject(e);
+                try {
+                    const json = JSON.parse(data);
+                    resolve(json);
+                } catch (e) {
+                    if (res.statusCode >= 300) {
+                        reject(new Error(`Request failed with status ${res.statusCode}`));
+                    } else {
+                        resolve(data); // Return text if not JSON
+                    }
                 }
             });
-        }).on('error', (e) => {
-            console.error('[Fetch] Network error:', e.message);
+        });
+
+        req.on('error', (e) => {
+            console.error('[Request] Network error:', e.message);
             reject(e);
         });
+
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Request timed out'));
+        });
+
+        if (body) {
+            req.write(body);
+        }
+        req.end();
     });
+}
+
+// Wrapper for existing calls
+async function fetchJSON(targetUrl) {
+    return makeRequest(targetUrl);
+}
+
+async function resolveDebrid(magnetLink, fileIdx = null) {
+    if (!API_KEYS.debrid) {
+        console.log('[Debrid] No API key configured');
+        return null;
+    }
+
+    try {
+        console.log('[Debrid] ========================================');
+        console.log('[Debrid] Starting Debrid resolution');
+        console.log('[Debrid] Magnet:', magnetLink.substring(0, 60) + '...');
+        console.log('[Debrid] API Key:', API_KEYS.debrid.substring(0, 20) + '...');
+        console.log('[Debrid] ========================================');
+
+        // Step 1: Add magnet to seedbox
+        console.log('[Debrid] Step 1: Adding magnet to seedbox...');
+        const addData = await makeRequest(`${DEBRID_BASE_URL}/seedbox/add`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${API_KEYS.debrid}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: `url=${encodeURIComponent(magnetLink)}&async=true`
+        });
+
+        console.log('[Debrid] Add response received:', JSON.stringify(addData, null, 2));
+
+        if (!addData.success) {
+            console.error('[Debrid] ❌ Failed to add magnet');
+            console.error('[Debrid] Error:', addData.error);
+            console.error('[Debrid] Full response:', JSON.stringify(addData, null, 2));
+            return null;
+        }
+
+        if (!addData.value) {
+            console.error('[Debrid] ❌ No value in response');
+            console.error('[Debrid] Full response:', JSON.stringify(addData, null, 2));
+            return null;
+        }
+
+        const torrentId = addData.value.id;
+        console.log('[Debrid] ✅ Magnet added successfully');
+        console.log('[Debrid] Torrent ID:', torrentId);
+        console.log('[Debrid] Initial status:', addData.value.status + '%');
+
+        // Step 2: Poll for completion (max 60 seconds)
+        console.log('[Debrid] Step 2: Waiting for torrent to be ready...');
+        let attempts = 0;
+        const maxAttempts = 120; // 60 seconds
+        let torrent = addData.value;
+
+        while (torrent.status !== 100 && (!torrent.files || torrent.files.length === 0)) {
+            if (attempts >= maxAttempts) {
+                console.log('[Debrid] ⏱️ Timeout waiting for torrent (60s exceeded)');
+                console.log('[Debrid] Final status:', torrent.status + '%');
+                console.log('[Debrid] Files count:', torrent.files?.length || 0);
+                break;
+            }
+
+            await new Promise(r => setTimeout(r, 500)); // Wait 0.5s
+            attempts++;
+
+            // Check status
+            const listData = await makeRequest(`${DEBRID_BASE_URL}/seedbox/list?ids=${torrentId}`, {
+                headers: { 'Authorization': `Bearer ${API_KEYS.debrid}` }
+            });
+
+            if (listData.success && listData.value && listData.value.length > 0) {
+                torrent = listData.value[0];
+                if (attempts % 10 === 0) {
+                    console.log(`[Debrid] Polling... Status: ${torrent.status}%, Files: ${torrent.files?.length || 0}, Attempt: ${attempts}/${maxAttempts}`);
+                }
+            } else {
+                console.error('[Debrid] ❌ Failed to get torrent status');
+                console.error('[Debrid] Response:', JSON.stringify(listData, null, 2));
+            }
+        }
+
+        // Step 3: Get the largest video file
+        console.log('[Debrid] Step 3: Selecting video file...');
+        if (!torrent.files || torrent.files.length === 0) {
+            console.log('[Debrid] ❌ No files in torrent');
+            console.log('[Debrid] Torrent object:', JSON.stringify(torrent, null, 2));
+            return null;
+        }
+
+        console.log('[Debrid] Found', torrent.files.length, 'files');
+
+        // Find the right file
+        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+        let bestFile = null;
+
+        // If fileIdx is specified, use that file directly
+        if (fileIdx !== null && fileIdx >= 0 && fileIdx < torrent.files.length) {
+            bestFile = torrent.files[fileIdx];
+            console.log(`[Debrid] Using specified file index ${fileIdx}: ${bestFile?.name}`);
+        } else {
+            // Otherwise find largest video file
+            let maxSize = 0;
+            for (const file of torrent.files) {
+                const isVideo = videoExtensions.some(ext =>
+                    file.name?.toLowerCase().endsWith(ext)
+                );
+                if (isVideo && file.size > maxSize) {
+                    maxSize = file.size;
+                    bestFile = file;
+                }
+            }
+
+            // Fallback to largest file if no video found
+            if (!bestFile) {
+                console.log('[Debrid] No video file found, using largest file');
+                bestFile = torrent.files.reduce((a, b) => (a.size > b.size ? a : b));
+            }
+        }
+
+        if (bestFile && bestFile.downloadUrl) {
+            console.log(`[Debrid] ✅ SUCCESS! Got stream URL`);
+            console.log(`[Debrid] File: ${bestFile.name}`);
+            console.log(`[Debrid] Size: ${(bestFile.size / 1024 / 1024 / 1024).toFixed(2)} GB`);
+            console.log(`[Debrid] URL: ${bestFile.downloadUrl.substring(0, 60)}...`);
+            console.log('[Debrid] ========================================');
+            return bestFile.downloadUrl;
+        }
+
+        console.log('[Debrid] ❌ No download URL found in best file');
+        console.log('[Debrid] Best file object:', JSON.stringify(bestFile, null, 2));
+        console.log('[Debrid] ========================================');
+        return null;
+
+    } catch (error) {
+        console.error('[Debrid] ========================================');
+        console.error('[Debrid] ❌ EXCEPTION in resolveDebrid');
+        console.error('[Debrid] Error message:', error.message);
+        console.error('[Debrid] Error stack:', error.stack);
+        console.error('[Debrid] ========================================');
+        return null;
+    }
 }
 
 // ============================================
@@ -563,6 +737,7 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
         // Step 2: If we have debrid API key, resolve through debrid
         if (API_KEYS.debrid && bestStream.infoHash) {
             const magnet = `magnet:?xt=urn:btih:${bestStream.infoHash}`;
+            console.log('[Resolve] Attempting Debrid resolution...');
             const debridUrl = await resolveDebrid(magnet);
             if (debridUrl) {
                 console.log('[Resolve] ✅ Got debrid URL - returning clean stream');
@@ -573,33 +748,28 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
                     quality: bestStream.name?.match(/\d{3,4}p/)?.[0] || '1080p',
                     size: bestStream.title?.match(/💾\s*([\d.]+\s*GB)/)?.[1] || 'Unknown'
                 };
+            } else {
+                console.log('[Resolve] ❌ Debrid resolution failed');
+                return { error: 'debrid_failed', message: 'Failed to resolve stream via Debrid. Please try again later.' };
             }
         }
 
-        // Step 3: Return direct stream URL if available
-        if (bestStream.url) {
-            console.log('[Resolve] Using direct URL');
-            return { type: 'url', url: bestStream.url };
-        }
-
-        // Step 4: Return magnet link for client-side debrid resolution
-        if (bestStream.infoHash) {
-            const magnet = `magnet:?xt=urn:btih:${bestStream.infoHash}&dn=${encodeURIComponent(bestStream.behaviorHints?.filename || 'video')}`;
-            console.log('[Resolve] Returning magnet for client debrid');
-            return {
-                type: 'magnet',
-                magnet: magnet,
-                name: bestStream.name,
-                quality: bestStream.name?.match(/\d{3,4}p/)?.[0] || '1080p',
-                size: bestStream.title?.match(/💾\s*([\d.]+\s*GB)/)?.[1] || 'Unknown'
-            };
-        }
-
-        return { error: 'resolve_failed', message: 'Could not resolve stream' };
+        // If no debrid key configured, return error
+        console.log('[Resolve] ❌ No Debrid API key configured');
+        return { error: 'no_debrid', message: 'Server is not configured for stream resolution' };
 
     } catch (error) {
-        console.error('[Resolve] Error:', error);
-        return { error: 'server_error', message: 'Stream resolution failed' };
+        console.error('[Resolve] Error details:', error);
+
+        // Provide more descriptive error messages based on where it likely failed
+        if (error.message?.includes('JSON')) {
+            return { error: 'parse_error', message: 'Server failed to parse data from provider' };
+        }
+        if (error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
+            return { error: 'timeout', message: 'Request to stream provider timed out' };
+        }
+
+        return { error: 'server_error', message: `Stream resolution failed: ${error.message || 'Unknown error'}` };
     }
 }
 
