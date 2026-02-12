@@ -442,15 +442,25 @@ async function makeRequest(targetUrl, options = {}) {
 
     return new Promise((resolve, reject) => {
         const parsedUrl = url.parse(targetUrl);
+
+        // Prepare headers
+        const requestHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            ...headers
+        };
+
+        // Add Content-Length for POST requests with body
+        if (body) {
+            const bodyBuffer = Buffer.from(body, 'utf8');
+            requestHeaders['Content-Length'] = bodyBuffer.length;
+        }
+
         const reqOptions = {
             hostname: parsedUrl.hostname,
             path: parsedUrl.path,
             method: method,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json',
-                ...headers
-            },
+            headers: requestHeaders,
             timeout: 15000
         };
 
