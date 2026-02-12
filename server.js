@@ -157,8 +157,12 @@ const server = http.createServer(async (req, res) => {
             // Server does: stream search -> debrid -> clean URL
             const streamResult = await resolveStream(tmdbId, mediaType, title, season, episode);
 
-            if (streamResult) {
+            if (streamResult && !streamResult.error) {
                 sendJSON(res, { success: true, stream: streamResult });
+            } else if (streamResult?.error) {
+                // Return specific error with user-friendly message
+                const errorCode = streamResult.error === 'no_imdb_id' ? 422 : 404;
+                sendJSON(res, { success: false, error: streamResult.message }, errorCode);
             } else {
                 sendJSON(res, { success: false, error: 'No streams found' }, 404);
             }
@@ -296,9 +300,10 @@ const server = http.createServer(async (req, res) => {
         if (pathname === '/config' && method === 'GET') {
             // Provider config stored on server - app never has these URLs
             // Encoded as binary (base64) for additional obfuscation
+            // Note: | is URL-encoded as %7C for compatibility
             sendJSON(res, {
                 p: Buffer.from('https://torrentio.strem.fun').toString('base64'),
-                c: Buffer.from('sort=qualitysize|qualityfilter=480p,scr,cam').toString('base64'),
+                c: Buffer.from('sort=qualitysize%7Cqualityfilter=480p,scr,cam').toString('base64'),
                 s: Buffer.from('magnet:?xt=urn:btih:').toString('base64'),
                 v: 1  // config version
             });
@@ -466,7 +471,8 @@ async function fetchJSON(targetUrl) {
 
 // Stream Index URL (kept on server only)
 const STREAM_INDEX_URL = 'https://torrentio.strem.fun';
-const STREAM_INDEX_CONFIG = 'sort=qualitysize|qualityfilter=480p,scr,cam';
+// Note: | must be URL-encoded as %7C for Node.js https module
+const STREAM_INDEX_CONFIG = 'sort=qualitysize%7Cqualityfilter=480p,scr,cam';
 
 // Search streams - returns list for local debrid resolution
 async function searchStreams(imdbId, mediaType, season, episode) {
@@ -529,7 +535,7 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
 
         if (!imdbId) {
             console.log('[Resolve] No IMDB ID found');
-            return null;
+            return { error: 'no_imdb_id', message: 'This title is not available yet' };
         }
         console.log(`[Resolve] Got IMDB ID: ${imdbId}`);
 
@@ -544,7 +550,7 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
 
         if (!torrents.streams || torrents.streams.length === 0) {
             console.log('[Resolve] No torrents found');
-            return null;
+            return { error: 'no_streams', message: 'No streams available for this content' };
         }
 
         // Find best quality stream (prefer 1080p/4K with good seeds)
@@ -589,11 +595,11 @@ async function resolveStream(tmdbId, mediaType, title, season, episode) {
             };
         }
 
-        return null;
+        return { error: 'resolve_failed', message: 'Could not resolve stream' };
 
     } catch (error) {
         console.error('[Resolve] Error:', error);
-        return null;
+        return { error: 'server_error', message: 'Stream resolution failed' };
     }
 }
 
